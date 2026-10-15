@@ -1,0 +1,22 @@
+# Secrets — never commit real keys
+.env
+backend/.env
+frontend/.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.db
+bookleaf.db
+
+# Node / build
+node_modules/
+dist/
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
