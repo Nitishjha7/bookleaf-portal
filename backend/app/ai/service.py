@@ -1,0 +1,213 @@
+"""
+AI service: classification, priority scoring, and reply drafting.
+
+This module turns a raw ticket into (category, priority, draft reply) using the
+LLM, and degrades gracefully to rule-based logic when the AI is unavailable.
+
+COST STRATEGY (assignment requirement D.4) — three deliberate choices:
+  1. Classification AND priority are done in a SINGLE call, not two. The model
+     returns both in one small JSON object.
+  2. That call sends ONLY the subject + description + the fixed label lists.
+     It does NOT send the knowledge base or any ticket history — they are not
+     needed to pick a label, and they would be the biggest token cost.
+  3. The knowledge base is sent ONLY on the draft call, and the draft call runs
+     ONLY when an admin opens a ticket (lazy, on demand) — never on every
+     ticket at creation. We also pass just the ONE relevant book's figures, not
+     the author's whole catalogue.
+Net effect: creating a ticket costs one tiny call; the expensive context is
+spent once, only when a human is actually about to use it.
+"""
+from __future__ import annotations
+import json
+import re
+
+from ..models import Ticket, Book, TicketCategory, TicketPriority
+from .client import complete, AIUnavailable
+from .knowledge_base import KNOWLEDGE_BASE, CATEGORIES, PRIORITIES
+
+
+# --- helpers to map free text back onto our enums safely ------------------
+
+def _to_category(value: str | None) -> TicketCategory | None:
+    if not value:
+        return None
+    value = value.strip()
+    for c in TicketCategory:
+        if c.value.lower() == value.lower():
+            return c
+    return None
+
+
+def _to_priority(value: str | None) -> TicketPriority | None:
+    if not value:
+        return None
+    for p in TicketPriority:
+        if p.value.lower() == value.strip().lower():
+            return p
+    return None
+
+
+# ==========================================================================
+# 1. CLASSIFY + PRIORITISE  (one cheap call)
+# ==========================================================================
+
+_CLASSIFY_SYSTEM = f"""You are a triage assistant for BookLeaf Publishing's author-support desk.
+Classify each author query into exactly one category and assign a priority.
+
+Categories (choose one, verbatim):
+{chr(10).join('- ' + c for c in CATEGORIES)}
+
+Priorities (choose one, verbatim): {', '.join(PRIORITIES)}
+
+Priority guidance:
+- Critical: money owed/overdue, wrong ISBN live, legal/defamation, anything blocking sales or payments for a long time.
+- High: ISBN/metadata errors, print defects on delivered copies, book unavailable on a store.
+- Medium: production delays, status questions, royalty-breakdown questions.
+- Low: general how-to, bio/description edits, informational queries.
+
+Respond with ONLY a compact JSON object, no prose:
+{{"category": "<one category>", "priority": "<one priority>", "reason": "<max 12 words>"}}"""
+
+
+def classify_ticket(subject: str, description: str) -> dict:
+    """
+    Returns {category: TicketCategory, priority: TicketPriority,
+             note: str, source: 'ai'|'fallback'}.
+    Never raises — always returns a usable result.
+    """
+    user = f"Subject: {subject}\n\nDescription: {description}"
+    try:
+        raw = complete(system=_CLASSIFY_SYSTEM, user=user, max_tokens=120, temperature=0.0)
+        parsed = _extract_json(raw)
+        category = _to_category(parsed.get("category"))
+        priority = _to_priority(parsed.get("priority"))
+        if category and priority:
+            return {
+                "category": category,
+                "priority": priority,
+                "note": f"AI: {parsed.get('reason', '').strip()}"[:200],
+                "source": "ai",
+            }
+        # Parsed but labels didn't match -> fall through to rules.
+    except AIUnavailable:
+        pass
+    result = _rule_based_classify(subject, description)
+    result["source"] = "fallback"
+    return result
+
+
+def _extract_json(raw: str) -> dict:
+    """Pull the first {...} block out of the model output and parse it."""
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        return {}
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
+
+
+# --- rule-based fallback (used when the AI is down) -----------------------
+
+_KEYWORDS = [
+    (TicketCategory.ROYALTY,      ["royalt", "payment", "payout", "paid", "money", "earning", "bank"]),
+    (TicketCategory.ISBN,         ["isbn", "metadata", "barcode", "imprint"]),
+    (TicketCategory.PRINTING,     ["print", "quality", "misprint", "binding", "blurry", "page", "defect", "reprint"]),
+    (TicketCategory.DISTRIBUTION, ["amazon", "flipkart", "unavailable", "listing", "distribut", "out of stock", "store"]),
+    (TicketCategory.STATUS,       ["status", "typeset", "proofread", "cover", "production", "when will", "stuck", "delay"]),
+]
+
+
+def _rule_based_classify(subject: str, description: str) -> dict:
+    text = f"{subject} {description}".lower()
+    category = TicketCategory.GENERAL
+    for cat, words in _KEYWORDS:
+        if any(w in text for w in words):
+            category = cat
+            break
+
+    # Priority from urgency words + category.
+    priority = TicketPriority.LOW
+    if any(w in text for w in ["month", "still haven", "never received", "wrong isbn",
+                               "overdue", "urgent", "not received", "6 month", "legal"]):
+        priority = TicketPriority.CRITICAL
+    elif category in (TicketCategory.ISBN, TicketCategory.PRINTING, TicketCategory.DISTRIBUTION):
+        priority = TicketPriority.HIGH
+    elif category in (TicketCategory.ROYALTY, TicketCategory.STATUS):
+        priority = TicketPriority.MEDIUM
+
+    return {
+        "category": category,
+        "priority": priority,
+        "note": "Rule-based fallback (AI unavailable)",
+    }
+
+
+# ==========================================================================
+# 2. DRAFT A REPLY  (KB-grounded, on demand only)
+# ==========================================================================
+
+_DRAFT_SYSTEM = """You are a support representative for BookLeaf Publishing writing a reply to an author.
+Write as BookLeaf, using ONLY the policies in the knowledge base below. Follow the tone rules exactly:
+empathetic and professional, acknowledge the concern first, use the author's actual numbers/dates/status,
+own any BookLeaf mistake directly, give concrete timelines (e.g. 48 hours) when escalating, and END with a
+clear next step. Do not invent policies, numbers, or facts that are not provided. Keep it to a few short
+paragraphs. Output only the reply body — no subject line, no placeholders like [Name].
+
+KNOWLEDGE BASE
+--------------
+""" + KNOWLEDGE_BASE
+
+
+def _book_context(book: Book | None) -> str:
+    """Only the ONE relevant book's figures — not the whole catalogue (cost)."""
+    if book is None:
+        return "This ticket is general / account-level (not about a specific book)."
+    return (
+        f"Book: {book.title} (ISBN {book.isbn}, genre {book.genre})\n"
+        f"Status: {book.status}\n"
+        f"MRP: Rs.{book.mrp}; royalty per copy: Rs.{book.author_royalty_per_copy}\n"
+        f"Copies sold: {book.total_copies_sold}\n"
+        f"Royalty earned: Rs.{book.total_royalty_earned}; paid: Rs.{book.royalty_paid}; "
+        f"pending: Rs.{book.royalty_pending}\n"
+        f"Last payout date: {book.last_royalty_payout_date or 'none yet'}\n"
+        f"Print partner: {book.print_partner}; available on: {', '.join(book.available_on or []) or 'not listed yet'}"
+    )
+
+
+def draft_response(ticket: Ticket) -> dict:
+    """
+    Returns {draft: str, source: 'ai'|'fallback'}.
+    Never raises — on AI failure returns a safe, policy-shaped skeleton the
+    admin can complete manually.
+    """
+    user = (
+        f"Author name: {ticket.author.name}\n"
+        f"Category (triaged): {ticket.category.value if ticket.category else 'Unknown'}\n\n"
+        f"{_book_context(ticket.book)}\n\n"
+        f"--- Author's query ---\n"
+        f"Subject: {ticket.subject}\n"
+        f"Message: {ticket.description}\n\n"
+        f"Write BookLeaf's reply."
+    )
+    try:
+        draft = complete(system=_DRAFT_SYSTEM, user=user, max_tokens=600, temperature=0.4)
+        if draft:
+            return {"draft": draft, "source": "ai"}
+    except AIUnavailable:
+        pass
+    return {"draft": _fallback_draft(ticket), "source": "fallback"}
+
+
+def _fallback_draft(ticket: Ticket) -> str:
+    """A tone-correct skeleton so an admin is never left with a blank box."""
+    name = ticket.author.name.split()[0] if ticket.author and ticket.author.name else "there"
+    return (
+        f"Hi {name},\n\n"
+        f"Thank you for reaching out, and I'm sorry for any inconvenience regarding "
+        f"\"{ticket.subject}\". I completely understand your concern.\n\n"
+        f"[AI drafting is currently unavailable — please complete this reply using the "
+        f"relevant BookLeaf policy and the author's specific details.]\n\n"
+        f"We'll look into this and get back to you within 48 hours with a clear update.\n\n"
+        f"Warm regards,\nBookLeaf Author Support"
+    )
