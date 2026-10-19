@@ -1,0 +1,44 @@
+# One-command local run:  docker compose up --build
+# Brings up Postgres, the FastAPI backend (seeded), and the React frontend.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bookleaf
+      POSTGRES_PASSWORD: bookleaf
+      POSTGRES_DB: bookleaf
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookleaf"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://bookleaf:bookleaf@db:5432/bookleaf
+      SECRET_KEY: change-me-in-production
+      # Put your key here (or in a .env file) to enable live AI. Without it the
+      # app still runs with rule-based triage + manual drafting.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_MODEL: claude-3-5-haiku-20241022
+      CORS_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+    ports:
+      - "8099:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
