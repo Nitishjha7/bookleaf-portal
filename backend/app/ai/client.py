@@ -1,17 +1,4 @@
-"""
-Thin wrapper around the Anthropic API.
-
-The ONLY place that talks to the LLM. Everything else calls `complete()` and
-gets back either text or a clear AIUnavailable error. This isolates:
-  * the API key (read from settings, never passed around),
-  * the model name,
-  * and — most importantly — the failure handling.
-
-Graceful degradation (assignment requirement D.3):
-If the key is missing, or the API errors / times out / is rate-limited, we do
-NOT crash the request. We raise AIUnavailable, and the caller decides what to
-do (fall back to a rule-based category, or let the admin write manually).
-"""
+"""Gemini wrapper. Everything that needs the LLM goes through complete()."""
 from __future__ import annotations
 import logging
 
@@ -21,11 +8,9 @@ logger = logging.getLogger("bookleaf.ai")
 
 
 class AIUnavailable(Exception):
-    """Raised when the AI could not produce a result for any reason."""
+    """No key, API error, timeout, rate limit... callers should use their fallback."""
 
 
-# The SDK is imported lazily so the app still boots even if the package or key
-# is absent (e.g. a reviewer who just wants to see the portals without a key).
 _client = None
 
 
@@ -34,28 +19,32 @@ def _get_client():
     if _client is not None:
         return _client
     if not settings.ai_active:
-        raise AIUnavailable("AI disabled or no ANTHROPIC_API_KEY configured")
+        raise AIUnavailable("AI is disabled or GEMINI_API_KEY is not set")
     try:
-        import anthropic
-        _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        from google import genai
+        _client = genai.Client(api_key=settings.gemini_api_key)
         return _client
     except Exception as e:  # noqa: BLE001
-        raise AIUnavailable(f"Could not initialise Anthropic client: {e}")
+        raise AIUnavailable(f"could not create Gemini client: {e}")
 
 
 def complete(*, system: str, user: str, max_tokens: int = 600,
              temperature: float = 0.3) -> str:
-    """Send one message and return the model's text, or raise AIUnavailable."""
     client = _get_client()
     try:
-        msg = client.messages.create(
+        from google.genai import types
+        resp = client.models.generate_content(
             model=settings.ai_model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system,
-            messages=[{"role": "user", "content": user}],
+            contents=user,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+                # thinking tokens would eat into max_output_tokens and we don't need them here
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
         )
-        return "".join(block.text for block in msg.content if block.type == "text").strip()
-    except Exception as e:  # noqa: BLE001 — includes rate limits, timeouts, API errors
-        logger.warning("AI call failed: %s", e)
+        return (resp.text or "").strip()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("gemini call failed: %s", e)
         raise AIUnavailable(str(e))

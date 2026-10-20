@@ -1,18 +1,7 @@
-"""
-Database models (the schema).
+"""Database tables.
 
-Design notes
-------------
-- Author and Admin are kept as two separate tables rather than one "users"
-  table with a role flag. They genuinely have different data (an author has
-  books and tickets; an admin handles tickets), and keeping them apart makes
-  the role-based access rules trivial to reason about.
-- A Ticket is the centre of the system. It stores the AI's classification,
-  priority and draft, PLUS whether a human overrode them — so we never lose
-  the fact that the AI's original guess and the human decision differed.
-- Responses (visible to the author) and internal notes (admin-only) are two
-  separate tables on purpose, so there is no way to accidentally leak an
-  internal note to an author.
+Author and Admin are separate tables, and replies and internal notes are separate
+tables, so a note can never end up on an author route by mistake.
 """
 from datetime import datetime, timezone
 import enum
@@ -28,8 +17,6 @@ from .database import Base
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-
-# --- Enums (also used to validate admin overrides) -----------------------
 
 class TicketStatus(str, enum.Enum):
     OPEN = "Open"
@@ -54,8 +41,6 @@ class TicketPriority(str, enum.Enum):
     LOW = "Low"
 
 
-# --- Core tables ----------------------------------------------------------
-
 class Author(Base):
     __tablename__ = "authors"
 
@@ -65,7 +50,7 @@ class Author(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     phone = Column(String)
     city = Column(String)
-    joined_date = Column(String)                            # kept as given in seed
+    joined_date = Column(String)                            # plain string, same as the seed file
     hashed_password = Column(String, nullable=False)
 
     books = relationship("Book", back_populates="author", cascade="all, delete-orphan")
@@ -111,7 +96,7 @@ class Ticket(Base):
 
     id = Column(Integer, primary_key=True)
     author_id = Column(Integer, ForeignKey("authors.id"), nullable=False)
-    # Nullable: a ticket can be "General / Account Level" with no book.
+    # no book = general / account level ticket
     book_id = Column(Integer, ForeignKey("books.id"), nullable=True)
 
     subject = Column(String, nullable=False)
@@ -119,15 +104,14 @@ class Ticket(Base):
 
     status = Column(Enum(TicketStatus), default=TicketStatus.OPEN, nullable=False)
 
-    # AI fields: we store BOTH the AI's original guess and the effective value
-    # after any human override, so the two are never confused.
+    # ai_* is what the model said, category/priority is the current value (may be overridden)
     ai_category = Column(Enum(TicketCategory), nullable=True)
     ai_priority = Column(Enum(TicketPriority), nullable=True)
-    category = Column(Enum(TicketCategory), nullable=True)   # effective (AI or override)
-    priority = Column(Enum(TicketPriority), nullable=True)   # effective (AI or override)
-    category_overridden = Column(Integer, default=0)         # 0/1 flag
+    category = Column(Enum(TicketCategory), nullable=True)   # current value
+    priority = Column(Enum(TicketPriority), nullable=True)   # current value
+    category_overridden = Column(Integer, default=0)         # 0/1
     priority_overridden = Column(Integer, default=0)
-    ai_classification_note = Column(Text, nullable=True)     # one-line AI reasoning / fallback note
+    ai_classification_note = Column(Text, nullable=True)     # short reason from the model, or the fallback note
 
     assigned_admin_id = Column(Integer, ForeignKey("admins.id"), nullable=True)
 
@@ -148,14 +132,14 @@ class Ticket(Base):
 
 
 class TicketResponse(Base):
-    """A reply from the admin team. VISIBLE to the author."""
+    """reply to the author, visible to them"""
     __tablename__ = "ticket_responses"
 
     id = Column(Integer, primary_key=True)
     ticket_id = Column(Integer, ForeignKey("tickets.id"), nullable=False)
     admin_id = Column(Integer, ForeignKey("admins.id"), nullable=True)
     body = Column(Text, nullable=False)
-    was_ai_drafted = Column(Integer, default=0)  # was this edited down from an AI draft?
+    was_ai_drafted = Column(Integer, default=0)  # started from an AI draft
     created_at = Column(DateTime, default=utcnow)
 
     ticket = relationship("Ticket", back_populates="responses")
@@ -163,7 +147,7 @@ class TicketResponse(Base):
 
 
 class InternalNote(Base):
-    """An admin-only note on a ticket. NEVER returned on any author route."""
+    """admin-only, never returned by the author routes"""
     __tablename__ = "internal_notes"
 
     id = Column(Integer, primary_key=True)

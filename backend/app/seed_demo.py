@@ -1,17 +1,9 @@
-"""
-Optional: add a handful of realistic demo tickets on top of the base seed.
-
-Run AFTER app.seed:  python -m app.seed_demo
-This makes the live demo look populated (an admin queue with varied categories
-and priorities, one ticket already answered). It goes through the same AI triage
-path the app uses, so with an API key set the categories/priorities come from the
-model; without one they come from the rule-based fallback.
-"""
+"""Adds a few sample tickets so the admin queue isn't empty. Run after app.seed."""
 from .database import SessionLocal
 from .models import Author, Book, Ticket, TicketResponse, TicketStatus, Admin
 from .ai.service import classify_ticket
 
-# (author email, book title or None, subject, description)
+# author email, book title (or None), subject, description
 DEMO = [
     ("priya.sharma@email.com", "Whispers of the Ganges",
      "Haven't received royalty in 6 months",
@@ -66,7 +58,7 @@ def run():
             )
             db.add(ticket)
             db.flush()
-            # Answer the first one so the demo shows a full thread.
+            # reply to the first one so there is a thread to look at
             if made == 0 and admin:
                 ticket.status = TicketStatus.IN_PROGRESS
                 ticket.responses.append(TicketResponse(

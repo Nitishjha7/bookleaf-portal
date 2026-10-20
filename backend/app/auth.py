@@ -1,14 +1,4 @@
-"""
-Authentication & authorisation.
-
-- Passwords are hashed with bcrypt (never stored in plain text).
-- Login returns a JWT that encodes the user's id and role.
-- Three dependencies enforce access:
-    get_current_author  -> route is author-only
-    get_current_admin   -> route is admin-only
-    get_current_principal -> either; used where both may read
-RBAC is therefore enforced in one place and reused, not re-implemented per route.
-"""
+"""Password hashing, JWT creation and the role checks used by the routers."""
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -25,10 +15,8 @@ from .models import Author, Admin
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
-# --- password helpers -----------------------------------------------------
-# We use the `bcrypt` library directly (rather than passlib) to avoid a known
-# version-detection incompatibility between passlib 1.7 and bcrypt 4.x.
-# bcrypt has a 72-byte input limit, so we encode and truncate defensively.
+# using bcrypt directly, passlib 1.7 breaks with bcrypt 4.x
+# bcrypt only looks at the first 72 bytes so cut it there
 
 def hash_password(raw: str) -> str:
     pw = raw.encode("utf-8")[:72]
@@ -41,8 +29,6 @@ def verify_password(raw: str, hashed: str) -> bool:
     except (ValueError, TypeError):
         return False
 
-
-# --- token helpers --------------------------------------------------------
 
 def create_access_token(*, user_id: int, role: Literal["author", "admin"]) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
@@ -61,10 +47,8 @@ def _decode(token: str) -> dict:
         )
 
 
-# --- principal objects ----------------------------------------------------
-
 class Principal:
-    """A lightweight 'who is calling' object attached to the request."""
+    """whoever is calling, an author or an admin"""
     def __init__(self, role: str, author: Author | None = None, admin: Admin | None = None):
         self.role = role
         self.author = author
@@ -75,19 +59,17 @@ class Principal:
         return self.author.id if self.role == "author" else self.admin.id
 
 
-# --- dependencies ---------------------------------------------------------
-
 def get_current_principal(token: str = Depends(oauth2_scheme),
                           db: Session = Depends(get_db)) -> Principal:
     data = _decode(token)
     user_id, role = int(data.get("sub", 0)), data.get("role")
     if role == "author":
-        author = db.query(Author).get(user_id)
+        author = db.get(Author, user_id)
         if not author:
             raise HTTPException(status_code=401, detail="Author not found")
         return Principal("author", author=author)
     if role == "admin":
-        admin = db.query(Admin).get(user_id)
+        admin = db.get(Admin, user_id)
         if not admin:
             raise HTTPException(status_code=401, detail="Admin not found")
         return Principal("admin", admin=admin)

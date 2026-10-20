@@ -1,10 +1,4 @@
-"""
-Turn ORM Ticket objects into the right response shape.
-
-Two separate functions so the author view and the admin view can never be
-confused: the author serializer simply has no code path that emits internal
-notes or AI metadata.
-"""
+"""Ticket -> response models. The author view never includes notes or AI fields."""
 from .models import Ticket
 from .schemas import (
     TicketAuthorView, TicketAdminView, ResponseOut, NoteOut

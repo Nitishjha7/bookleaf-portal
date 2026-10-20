@@ -1,9 +1,4 @@
-"""
-FastAPI application entry point.
-
-Wires together CORS, the routers, a health check, and a couple of global
-exception handlers so clients always get a clean JSON error (never a bare 500).
-"""
+"""App entry point: CORS, routers, health check and JSON error handlers."""
 import logging
 
 from fastapi import FastAPI, Request
@@ -17,18 +12,13 @@ from .routers import auth, authors, admin
 
 logging.basicConfig(level=logging.INFO)
 
-# Create tables on boot if they don't exist. (Seeding is a separate explicit
-# step — see app/seed.py — so we never wipe data automatically.)
+# tables only, seeding is a separate step (app/seed.py)
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="BookLeaf Author Support & Communication Portal",
     version="1.0.0",
-    description=(
-        "Two-portal support system (author + admin) with AI-assisted ticket "
-        "triage and reply drafting. See the README for architecture and the "
-        "AI integration strategy."
-    ),
+    description="Author and admin support portal with Gemini-assisted ticket triage and reply drafting.",
 )
 
 app.add_middleware(
@@ -40,7 +30,7 @@ app.add_middleware(
 )
 
 
-# --- global error handling (requirement C: meaningful errors, not 500s) ---
+# error handlers
 
 @app.exception_handler(RequestValidationError)
 async def validation_handler(request: Request, exc: RequestValidationError):
@@ -59,8 +49,6 @@ async def unhandled_handler(request: Request, exc: Exception):
     )
 
 
-# --- routes ---------------------------------------------------------------
-
 app.include_router(auth.router)
 app.include_router(authors.router)
 app.include_router(admin.router)
@@ -68,5 +56,5 @@ app.include_router(admin.router)
 
 @app.get("/api/health", tags=["meta"])
 def health():
-    """Liveness probe + a quick way to confirm whether AI is configured."""
+    """for docker/cloud run healthchecks, also shows whether the AI key was picked up"""
     return {"status": "ok", "ai_active": settings.ai_active, "model": settings.ai_model}

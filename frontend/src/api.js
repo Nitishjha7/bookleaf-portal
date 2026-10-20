@@ -1,5 +1,4 @@
-// Tiny fetch wrapper. One place adds the auth header, parses JSON, and turns
-// non-2xx responses into thrown Errors carrying the backend's detail message.
+// fetch wrapper: adds the token, throws an Error with the backend's `detail` on non-2xx
 
 const BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -43,7 +42,11 @@ async function request(method, path, body, { form = false } = {}) {
 
   if (!res.ok) {
     if (res.status === 401) clearSession();
-    const msg = data?.detail || `Request failed (${res.status})`;
+    let msg = data?.detail || `Request failed (${res.status})`;
+    if (res.status === 422 && Array.isArray(data?.errors)) {
+      // show which field failed, e.g. "subject: String should have at least 3 characters"
+      msg = data.errors.map((e) => `${e.loc[e.loc.length - 1]}: ${e.msg}`).join("; ");
+    }
     throw new Error(typeof msg === "string" ? msg : "Request failed");
   }
   return data;
@@ -53,13 +56,11 @@ export const api = {
   login: (email, password) =>
     request("POST", "/api/auth/login", { username: email, password }, { form: true }),
 
-  // author
   myBooks: () => request("GET", "/api/me/books"),
   myTickets: () => request("GET", "/api/me/tickets"),
   myTicket: (id) => request("GET", `/api/me/tickets/${id}`),
   createTicket: (payload) => request("POST", "/api/me/tickets", payload),
 
-  // admin
   queue: (qs = "") => request("GET", `/api/admin/tickets${qs}`),
   ticket: (id) => request("GET", `/api/admin/tickets/${id}`),
   aiDraft: (id) => request("POST", `/api/admin/tickets/${id}/ai-draft`),

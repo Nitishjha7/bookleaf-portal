@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { clearSession, getName } from "./api";
 
-// Coloured pill for status / priority / category.
+// pill for status / priority / category
 export function Badge({ kind, value }) {
   const slug = (value || "").toLowerCase().replace(/[^a-z]+/g, "-");
   return <span className={`badge badge-${kind} badge-${kind}-${slug}`}>{value}</span>;

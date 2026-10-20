@@ -1,14 +1,9 @@
-"""
-Seed the database from seed_data.json (the dataset BookLeaf provided).
+"""Loads seed_data.json (10 authors, 18 books) and creates one admin.
 
-Run as:  python -m app.seed
-It is idempotent: it drops and recreates the tables, then loads the 10 authors
-and 18 books, creates demo login passwords, and adds one admin account.
+    python -m app.seed
 
-Login passwords (demo only):
-  - every author logs in with their email + password "author123"
-  - admin: admin@bookleaf.com / "admin123"
-These are printed at the end and documented in the README.
+Drops and recreates all tables first. Logins: admin@bookleaf.com / admin123,
+authors use their own email with author123.
 """
 import json
 import os
@@ -23,7 +18,7 @@ ADMIN_PASSWORD = "admin123"
 
 
 def run():
-    # Fresh schema so re-seeding is always clean and predictable.
+    # wipes everything, so only run on a fresh or demo db
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
@@ -43,7 +38,7 @@ def run():
                 hashed_password=hash_password(AUTHOR_PASSWORD),
             )
             db.add(author)
-            db.flush()  # get author.id before adding books
+            db.flush()  # need author.id for the books
 
             for b in a.get("books", []):
                 db.add(Book(
@@ -65,7 +60,6 @@ def run():
                     available_on=b.get("available_on") or [],
                 ))
 
-        # One ops/admin account for the admin portal.
         db.add(Admin(
             name="BookLeaf Ops",
             email="admin@bookleaf.com",

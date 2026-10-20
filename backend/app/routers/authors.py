@@ -1,10 +1,4 @@
-"""
-Author-facing routes (prefix /api/me).
-
-Every route here depends on `get_current_author`, so an admin token cannot
-reach them and — crucially — an author only ever sees their OWN rows, because
-we filter by `current.id`, never by an id taken from the URL.
-"""
+"""Author routes under /api/me. Always filtered by the logged in author's id."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -53,12 +47,7 @@ def my_ticket(ticket_id: int, current: Author = Depends(get_current_author),
 @router.post("/tickets", response_model=TicketAuthorView, status_code=201)
 def create_ticket(payload: TicketCreate, current: Author = Depends(get_current_author),
                   db: Session = Depends(get_db)):
-    """
-    Create a support ticket. If a book is named it must belong to this author.
-    The AI triage (category + priority) runs here in ONE cheap call. If the AI
-    is down, the rule-based fallback still gives a sensible category/priority,
-    so ticket creation NEVER fails because of the AI.
-    """
+    """The book, if given, has to belong to the caller. Triage uses the keyword rules if Gemini is down."""
     book = None
     if payload.book_id is not None:
         book = db.query(Book).filter(
@@ -77,7 +66,7 @@ def create_ticket(payload: TicketCreate, current: Author = Depends(get_current_a
         status=TicketStatus.OPEN,
         ai_category=triage["category"],
         ai_priority=triage["priority"],
-        category=triage["category"],      # effective value starts equal to AI
+        category=triage["category"],    
         priority=triage["priority"],
         ai_classification_note=triage["note"],
     )

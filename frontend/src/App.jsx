@@ -5,14 +5,14 @@ import AuthorPortal from "./pages/author/AuthorPortal.jsx";
 import AdminQueue from "./pages/admin/AdminQueue.jsx";
 import AdminTicket from "./pages/admin/AdminTicket.jsx";
 
-// Route guard: requires a token and (optionally) a specific role.
+// needs a token, and a specific role if one is passed
 function Protected({ role, children }) {
   if (!getToken()) return <Navigate to="/login" replace />;
   if (role && getRole() !== role) return <Navigate to="/" replace />;
   return children;
 }
 
-// Send a logged-in user to their portal; everyone else to login.
+// logged in users go to their own portal
 function Home() {
   if (!getToken()) return <Navigate to="/login" replace />;
   return <Navigate to={getRole() === "admin" ? "/admin" : "/author"} replace />;

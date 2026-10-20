@@ -47,11 +47,11 @@ export default function SubmitQuery({ onCreated }) {
       </select>
 
       <label>Subject</label>
-      <input value={subject} onChange={(e) => setSubject(e.target.value)}
+      <input value={subject} onChange={(e) => setSubject(e.target.value)} minLength={3} maxLength={200}
              placeholder="e.g. Royalty for last quarter not received" />
 
       <label>Describe your query</label>
-      <textarea value={description} onChange={(e) => setDescription(e.target.value)}
+      <textarea value={description} onChange={(e) => setDescription(e.target.value)} minLength={5} maxLength={5000}
                 placeholder="Give us the details so we can help quickly…" />
 
       <label>Attachment (optional)</label>

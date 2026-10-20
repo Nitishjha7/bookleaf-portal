@@ -1,17 +1,5 @@
-"""
-The BookLeaf Knowledge Base, exactly as given in the assignment brief.
+"""Company policies given in the brief. Kept server side and passed to the model only when drafting a reply."""
 
-Why it lives here as a Python constant rather than in the database or a call
-argument:
-  * It is static company policy — it does not change per ticket or per author.
-  * Keeping it server-side (and out of the request/response cycle) means it is
-    never sent to the browser and the frontend cannot tamper with it.
-  * We split it into (a) the full policy block, used only when DRAFTING a
-    reply, and (b) a tiny category list, used for the cheap classification
-    call. This is the core of our cost strategy — see ai/service.py.
-"""
-
-# Full policy context — injected only into the (less frequent) draft call.
 KNOWLEDGE_BASE = """\
 COMPANY OVERVIEW
 - BookLeaf Publishing is a self-publishing company operating in India and the US.
@@ -54,7 +42,7 @@ COMMUNICATION TONE
 - Always end with a clear next step for the author and/or the BookLeaf team.
 """
 
-# The six fixed categories (used by classification + validated against the enum).
+# must match TicketCategory in models.py
 CATEGORIES = [
     "Royalty & Payments",
     "ISBN & Metadata Issues",

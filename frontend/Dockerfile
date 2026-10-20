@@ -1,14 +1,16 @@
-# Frontend image — build the React app, then serve the static files with nginx.
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 COPY . .
-# In the compose setup the frontend talks to the backend through nginx (/api),
-# so we build with an empty API base (relative URLs).
+# api url is baked in at build time (vite)
+ARG VITE_API_BASE=""
+ENV VITE_API_BASE=$VITE_API_BASE
 RUN npm run build
 
-FROM nginx:alpine
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+FROM nginx:1.27-alpine
+# the nginx image runs envsubst on /etc/nginx/templates, so ${PORT} gets filled in
+ENV PORT=8080
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
+EXPOSE 8080

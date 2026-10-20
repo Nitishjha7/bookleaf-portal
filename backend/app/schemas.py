@@ -1,9 +1,4 @@
-"""
-Pydantic schemas — the request/response contracts.
-
-These give us automatic input validation (bad input -> 422 with a clear
-message, never a 500) and a typed, documented API in Swagger.
-"""
+"""Request and response models."""
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
@@ -11,16 +6,12 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from .models import TicketStatus, TicketCategory, TicketPriority
 
 
-# --- auth -----------------------------------------------------------------
-
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
     role: str
     name: str
 
-
-# --- books ----------------------------------------------------------------
 
 class BookOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -42,8 +33,6 @@ class BookOut(BaseModel):
     available_on: list[str] = []
 
 
-# --- author profile -------------------------------------------------------
-
 class AuthorOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -55,10 +44,8 @@ class AuthorOut(BaseModel):
     joined_date: Optional[str]
 
 
-# --- tickets --------------------------------------------------------------
-
 class TicketCreate(BaseModel):
-    # book_id is optional -> "General / Account Level" ticket.
+    # no book_id = general ticket
     book_id: Optional[int] = None
     subject: str = Field(min_length=3, max_length=200)
     description: str = Field(min_length=5, max_length=5000)
@@ -96,12 +83,12 @@ class TicketBase(BaseModel):
 
 
 class TicketAuthorView(TicketBase):
-    """What an author sees — responses included, NO internal notes, NO AI meta."""
+    """no internal notes or AI fields"""
     responses: list[ResponseOut] = []
 
 
 class TicketAdminView(TicketBase):
-    """What an admin sees — everything, including AI meta and internal notes."""
+    """everything"""
     author_name: str
     author_email: str
     ai_category: Optional[TicketCategory]
@@ -114,8 +101,6 @@ class TicketAdminView(TicketBase):
     responses: list[ResponseOut] = []
     notes: list[NoteOut] = []
 
-
-# --- admin actions --------------------------------------------------------
 
 class StatusUpdate(BaseModel):
     status: TicketStatus
@@ -140,4 +125,4 @@ class RespondCreate(BaseModel):
 
 class AIDraftOut(BaseModel):
     draft: str
-    source: str  # "ai" or "fallback" — tells the UI whether the AI actually ran
+    source: str  # "ai" or "fallback"

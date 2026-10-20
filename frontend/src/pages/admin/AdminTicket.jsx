@@ -3,8 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { api, STATUSES, CATEGORIES, PRIORITIES } from "../../api";
 import { Header, Badge, Empty } from "../../components.jsx";
 
-// The admin's workbench for a single ticket: read the query, generate/edit an
-// AI draft, send the reply, and manage status / category / priority / notes.
+// single ticket view for admins
 export default function AdminTicket() {
   const { id } = useParams();
   const [t, setT] = useState(null);
@@ -67,7 +66,7 @@ export default function AdminTicket() {
         {flash && <div className="flash">{flash}</div>}
 
         <div className="split">
-          {/* LEFT: the conversation + reply box */}
+          {/* left: thread + reply box */}
           <div>
             <div className="card">
               <div className="ticket-top">
@@ -105,7 +104,7 @@ export default function AdminTicket() {
               )}
             </div>
 
-            {/* Reply composer with the AI draft */}
+            {/* reply box */}
             <div className="card">
               <h3 style={{ marginTop: 0 }}>Reply to the author</h3>
               <button className="btn btn-outline btn-sm" onClick={genDraft} disabled={drafting}>
@@ -126,7 +125,7 @@ export default function AdminTicket() {
             </div>
           </div>
 
-          {/* RIGHT: AI triage + management controls */}
+          {/* right: triage info and controls */}
           <div>
             <div className="card ai-box">
               <h3 style={{ marginTop: 0 }}>AI triage</h3>

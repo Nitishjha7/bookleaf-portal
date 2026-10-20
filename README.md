@@ -1,210 +1,173 @@
-# BookLeaf — Author Support & Communication Portal
+# BookLeaf Author Support Portal
 
-A two-portal support system (author-facing + admin-facing) with AI-assisted ticket
-triage and reply drafting, built for BookLeaf's technical assignment.
+Support desk for BookLeaf authors. Authors log in, see their books and raise tickets.
+Admins get a queue of tickets that is already categorised and prioritised by Gemini, and
+can ask for a drafted reply based on BookLeaf's policies before answering.
 
-Authors raise support queries about their books; the system automatically classifies
-each query, scores its priority, and — when an admin opens it — drafts a reply grounded
-in BookLeaf's actual policies. Admins can override anything the AI decides and always
-stay in control of what gets sent.
+- Backend: FastAPI + SQLAlchemy (SQLite locally, Postgres in Docker / Cloud SQL)
+- Frontend: React + Vite
+- AI: Google Gemini (`gemini-3.8-flash`), with keyword rules as a fallback if there is no key or the API fails
+- Hosting: Docker Compose locally, Cloud Run on GCP (see [DEPLOYMENT.md](DEPLOYMENT.md))
 
----
+## Running it
 
-## Tech stack (and why I chose it)
+### Docker
 
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Backend | **Python + FastAPI** | Fast to build, typed request/response models give me free validation and Swagger docs, and it's a clean fit for calling an LLM API. |
-| Database | **PostgreSQL** (SQLAlchemy ORM) | Relational data (authors → books, authors → tickets → responses/notes) maps naturally to tables with foreign keys. SQLAlchemy keeps the code DB-agnostic — it runs on **SQLite with zero setup** for a quick local run, and on Postgres in Docker/production via `DATABASE_URL`. |
-| Frontend | **React (Vite)** | The assignment doesn't need SSR, so a lightweight SPA with React Router is the simplest thing that works. |
-| AI / LLM | **Anthropic Claude 3.5 Haiku** | Cheap, fast, and more than capable for classification and short policy-grounded replies. Model choice is justified in detail below. |
-| Real-time | **Polling** | The ticket feed polls every few seconds. For a support inbox this feels instant, needs no socket infrastructure, and never drops a connection. |
+```bash
+GEMINI_API_KEY=your-key docker compose up --build
+```
 
----
+The key is optional. Without it everything works, triage just uses keyword rules.
 
-## Architecture
+| What | URL |
+|------|-----|
+| Frontend | http://localhost:8080 |
+| API docs (Swagger) | http://localhost:8099/docs |
+| Postgres | localhost:5433 |
 
-I kept a clean separation of concerns so nothing turns into spaghetti:
+Tables, the dataset and a few sample tickets are loaded on first start. Restarting doesn't
+wipe anything (`app/bootstrap.py` skips seeding if there are already authors).
+
+### Without Docker
+
+Needs Python 3.11 or 3.12 and Node 20.
+
+```bash
+# backend
+cd backend
+python -m venv venv
+source venv/bin/activate          # venv\Scripts\activate on Windows
+pip install -r requirements.txt
+cp .env.example .env              # put GEMINI_API_KEY in here if you have one
+python -m app.seed                # authors + books (drops existing tables!)
+python -m app.seed_demo           # optional sample tickets
+uvicorn app.main:app --reload --port 8099
+```
+
+```bash
+# frontend, in another terminal
+cd frontend
+npm install
+npm run dev                       # http://localhost:5173, /api is proxied to :8099
+```
+
+### Logins
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | admin@bookleaf.com | admin123 |
+| Author | priya.sharma@email.com | author123 |
+
+All authors in `backend/seed_data.json` use `author123`.
+
+### Tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+Tests use a temporary SQLite file and no API key, so they also cover the fallback path. They check
+login, that authors and admins can't use each other's routes, that an author can't see another
+author's books or tickets, validation errors, and the whole ticket flow.
+
+## How the AI part works
+
+Everything that talks to Gemini is in `backend/app/ai/client.py`. The rest of the code calls
+`complete()` and either gets text back or an `AIUnavailable` exception.
+
+**Triage (when a ticket is created).** One call returns category, priority and a short reason as
+JSON. Only the subject and description are sent. If the labels in the answer aren't one of our enum
+values, or the call fails, `classify_ticket` uses keyword rules instead, so creating a ticket never
+fails because of the AI.
+
+**Drafting (when an admin asks).** The knowledge base (`ai/knowledge_base.py`) and the details of the
+one book the ticket is about are sent along with instructions on tone. This is the expensive call, so
+it only runs when an admin clicks the button, not for every new ticket. If it fails the admin gets a
+short template to fill in.
+
+Both results carry `source: "ai" | "fallback"` and the UI shows which one it was. The model's original
+category and priority are stored next to the current ones, so you can see when an admin changed them.
+
+The API key is only read by the backend from `GEMINI_API_KEY`, the browser never sees it. Set
+`AI_MODEL` to change the model. Thinking is turned off for these calls because they are short and
+thinking tokens count against the output limit.
+
+## Code layout
 
 ```
 backend/app/
-├── main.py           # app wiring: CORS, routers, global error handlers, /health
-├── config.py         # all env-driven settings in one place (DB, secret, AI key)
-├── database.py       # SQLAlchemy engine + session dependency
-├── models.py         # the schema (Author, Book, Admin, Ticket, Response, Note)
-├── schemas.py        # Pydantic request/response contracts (validation lives here)
-├── auth.py           # password hashing, JWT, and the RBAC dependencies
-├── serializers.py    # ticket -> author view / admin view (leak-proof by design)
-├── seed.py           # load the provided dataset (10 authors, 18 books)
-├── seed_demo.py      # optional: a few realistic demo tickets for the live demo
-├── ai/
-│   ├── knowledge_base.py  # BookLeaf's policies as context (server-side only)
-│   ├── client.py          # the ONLY place that calls the LLM; isolates failures
-│   └── service.py         # classify + prioritise + draft, with rule-based fallback
-└── routers/
-    ├── auth.py       # POST /api/auth/login  (authors and admins)
-    ├── authors.py    # /api/me/*   (author-only, own data only)
-    └── admin.py      # /api/admin/* (admin-only, all tickets)
+  main.py          app, CORS, error handlers, /api/health
+  config.py        settings from env vars
+  database.py      engine + session
+  models.py        tables
+  schemas.py       request / response models
+  auth.py          bcrypt, JWT, author/admin dependencies
+  serializers.py   ticket -> author view / admin view
+  seed.py          loads seed_data.json (drops tables first)
+  seed_demo.py     sample tickets
+  bootstrap.py     used by the Dockerfile, seeds only an empty db
+  ai/              client.py (Gemini), service.py (triage + draft), knowledge_base.py
+  routers/         auth.py, authors.py (/api/me), admin.py (/api/admin)
+backend/tests/     pytest suite
+frontend/src/      pages/author, pages/admin, Login, api.js
+.github/workflows/ ci.yml, deploy.yml
 ```
 
-**Design decisions worth calling out:**
+Some choices worth knowing about:
 
-- **Two user tables (Author, Admin), not one "users" table with a role flag.** They
-  genuinely hold different data, and it makes the access rules trivial to reason about.
-- **Responses and internal notes are separate tables.** An internal note can never
-  accidentally be returned on an author route, because the author serializer has no code
-  path that touches notes.
-- **The ticket stores both the AI's original guess and the effective value.** `ai_category`
-  / `ai_priority` are kept untouched; `category` / `priority` hold the current value; a flag
-  records whether a human overrode it. So we never lose the fact that the AI and the human
-  disagreed — useful signal if you ever want to measure the model.
-- **One place talks to the LLM** (`ai/client.py`). Everything else calls `complete()` and
-  either gets text or a clean `AIUnavailable` error. That's what makes graceful degradation
-  simple rather than scattered.
+- Authors and admins are separate tables because they hold different things.
+- Replies (shown to the author) and internal notes (admins only) are separate tables, and the
+  author serializer has no way to include notes.
+- Author routes always filter by the logged-in author's id, never an id taken from the URL.
+- The ticket list polls every 5 seconds. Simple, and good enough for a support inbox.
 
----
+## API
 
-## How the AI integration works
+All routes are under `/api` and need a Bearer token except login. Swagger is at `/docs`.
 
-This was the highest-weighted part of the assignment, so I was deliberate about it.
+| Method | Path | Who | Notes |
+|--------|------|-----|-------|
+| POST | `/api/auth/login` | anyone | form fields `username` (email) and `password` |
+| GET | `/api/auth/me` | any | role and name |
+| GET | `/api/me` | author | profile |
+| GET | `/api/me/books` | author | own books with royalty numbers |
+| GET | `/api/me/tickets` | author | own tickets and replies |
+| GET | `/api/me/tickets/{id}` | author | 404 if it isn't theirs |
+| POST | `/api/me/tickets` | author | `{book_id?, subject, description}` |
+| GET | `/api/admin/tickets` | admin | queue, filters `status`, `category`, `priority` |
+| GET | `/api/admin/tickets/{id}` | admin | full ticket with AI fields and notes |
+| POST | `/api/admin/tickets/{id}/ai-draft` | admin | generate a draft reply |
+| POST | `/api/admin/tickets/{id}/responses` | admin | send a reply |
+| PATCH | `/api/admin/tickets/{id}/status` | admin | |
+| PATCH | `/api/admin/tickets/{id}/category` | admin | override category |
+| PATCH | `/api/admin/tickets/{id}/priority` | admin | override priority |
+| POST | `/api/admin/tickets/{id}/notes` | admin | internal note |
+| POST | `/api/admin/tickets/{id}/assign` | admin | assign to yourself |
+| GET | `/api/health` | anyone | status, and whether the AI key is set |
 
-### 1. Prompt engineering
-- **Classification + priority** use one tightly-scoped system prompt that lists the six exact
-  categories and the four priorities verbatim, plus short priority guidance (money owed and
-  wrong-ISBN-live are Critical; bio edits are Low). The model must reply with a compact JSON
-  object, which I parse and map back onto my enums — if the label doesn't match an enum, I fall
-  back to rules rather than trust free text.
-- **Drafting** uses a separate system prompt that injects BookLeaf's **Knowledge Base** and the
-  **tone guidelines** (acknowledge first, use real numbers/dates, own BookLeaf's mistakes, give
-  48-hour timelines, always end with a next step). It's explicitly told not to invent policies or
-  numbers. The result sounds like a BookLeaf rep, not generic AI filler.
+Bad input returns 422, a missing or bad token 401, the wrong role 403.
 
-### 2. API key security
-The key is read only on the backend from an environment variable (`ANTHROPIC_API_KEY`). It is
-never hardcoded and never sent to the frontend. The frontend has no idea the LLM exists — it just
-calls `/api/admin/tickets/{id}/ai-draft`.
+## Dataset edge cases
 
-### 3. Graceful degradation (AI down / rate-limited / no key)
-- **Classification never blocks ticket creation.** If the AI call fails for any reason, a
-  rule-based classifier (keyword + urgency heuristics) assigns a sensible category and priority,
-  and the ticket is marked so the admin knows it was a fallback.
-- **Drafting degrades to a safe, tone-correct skeleton** the admin can complete by hand, so an
-  admin is never stuck staring at a blank box.
-- Every AI result carries a `source: "ai" | "fallback"` field, and the UI shows which one ran.
+- Books with no payout yet (`last_royalty_payout_date: null`) show "none yet".
+- Books still in production (`Midnight in Mysore`, `Raising Roots`) have no MRP or ISBN, shown as "—", and can still be picked when raising a ticket.
+- Fully paid books (`royalty_pending: 0`) are fine.
+- Authors with one book or several both work in the book dropdown.
 
-### 4. Cost awareness
-Three concrete choices keep token usage down:
-1. **Classification and priority are one call, not two** — the model returns both in one small JSON object.
-2. **That call sends only the subject + description.** It does *not* send the knowledge base or
-   any ticket history — they aren't needed to pick a label and would be the biggest token cost.
-3. **The knowledge base is sent only on the draft call, and only when an admin actually opens a
-   ticket** (lazy, on demand) — never on every ticket at creation. I also pass just the *one*
-   relevant book's figures, not the author's whole catalogue.
+## CI/CD
 
-Net effect: creating a ticket costs one tiny call; the expensive context is spent once, only when
-a human is about to use it.
+`.github/workflows/ci.yml` runs on every push and PR: pytest for the backend, `npm run build` for the
+frontend, then it builds both Docker images.
 
-### 5. Model choice
-I went with **Claude 3.5 Haiku**. Classification and short, policy-grounded replies don't need a
-frontier model — Haiku is accurate enough, noticeably cheaper, and fast enough that the admin
-isn't left waiting for a draft. The LLM client is a thin wrapper, so switching models (or providers)
-is a one-line change in `config.py`.
+`.github/workflows/deploy.yml` runs after CI passes on `main` and deploys both services to Cloud Run.
+The one-time GCP setup is in [DEPLOYMENT.md](DEPLOYMENT.md).
 
----
+## Not done
 
-## Running it locally
-
-### Option A — Docker (one command)
-```bash
-# optional: export ANTHROPIC_API_KEY=sk-ant-...   (works without it too)
-docker compose up --build
-```
-- Frontend: http://localhost:8080
-- API + Swagger docs: http://localhost:8099/docs
-- Postgres: localhost:5433
-
-The backend seeds the provided dataset and a few demo tickets on boot.
-
-### Option B — Run the two parts by hand
-**Backend** (uses SQLite automatically if you don't set `DATABASE_URL`):
-```bash
-cd backend
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # add your ANTHROPIC_API_KEY (optional)
-python -m app.seed            # loads 10 authors + 18 books
-python -m app.seed_demo       # optional: adds demo tickets
-uvicorn app.main:app --reload --port 8099
-```
-**Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev                   # http://localhost:5173 (proxies /api to :8099)
-```
-
-### Demo logins
-| Role | Email | Password |
-|------|-------|----------|
-| Admin | `admin@bookleaf.com` | `admin123` |
-| Author | `priya.sharma@email.com` | `author123` |
-
-Every author in the dataset logs in with their email and the password `author123`
-(printed by `python -m app.seed`).
-
----
-
-## API reference
-
-All routes are under `/api`. Every route except login requires a `Bearer` JWT.
-Full interactive docs (and a Swagger "Authorize" button) are at **`/docs`**.
-
-### Auth
-| Method | Endpoint | Who | Description |
-|--------|----------|-----|-------------|
-| POST | `/api/auth/login` | public | Email + password (form fields `username`, `password`). Returns a JWT + role. |
-| GET | `/api/auth/me` | any | Current user's role and name. |
-
-### Author portal (author token; always scoped to the caller's own data)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/me` | The author's profile. |
-| GET | `/api/me/books` | The author's books with full royalty details. |
-| GET | `/api/me/tickets` | All the author's tickets with responses (no internal notes). |
-| GET | `/api/me/tickets/{id}` | A single ticket (404 if it isn't theirs). |
-| POST | `/api/me/tickets` | Raise a ticket `{book_id?, subject, description}`. Runs AI triage. |
-
-### Admin portal (admin token; all tickets)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/admin/tickets` | Full queue. Filters: `?status=&category=&priority=`. Sorted urgent-first. |
-| GET | `/api/admin/tickets/{id}` | Full ticket incl. AI metadata and internal notes. |
-| POST | `/api/admin/tickets/{id}/ai-draft` | Generate an AI draft reply (on demand). |
-| POST | `/api/admin/tickets/{id}/responses` | Send a reply `{body, was_ai_drafted}` (shows to the author). |
-| PATCH | `/api/admin/tickets/{id}/status` | Update status. |
-| PATCH | `/api/admin/tickets/{id}/category` | Override the AI category. |
-| PATCH | `/api/admin/tickets/{id}/priority` | Override the AI priority. |
-| POST | `/api/admin/tickets/{id}/notes` | Add an internal note (admin-only). |
-| POST | `/api/admin/tickets/{id}/assign` | Assign the ticket to the current admin. |
-
-Validation errors return `422` with details; auth failures return `401`; a forbidden
-cross-role or cross-author access returns `403` — never a bare `500`.
-
----
-
-## Handling the dataset's edge cases
-The provided data is intentionally varied, and the app handles each case:
-- **Zero royalties / never paid** (`royalty_pending` with `last_royalty_payout_date: null`) — shown as "none yet", no crash.
-- **Books still in production** (`Midnight in Mysore`, `Raising Roots`) with `null` MRP/ISBN — rendered as "—" and still selectable when raising a ticket.
-- **Fully-paid books** (`royalty_pending: 0`) — shown correctly.
-- **Authors with one book vs several** — the UI and the "which book?" dropdown both adapt.
-
----
-
-## Known limitations / what I'd do with more time
-- **Auth hardening:** tokens are stored in `localStorage` for simplicity; in production I'd move to httpOnly cookies and add refresh tokens.
-- **Real-time:** polling is intentionally simple. At higher volume I'd switch the ticket feed to Server-Sent Events.
-- **File attachments:** the upload field is UI-only (as the brief allowed). I'd wire it to object storage (S3/GCS) with pre-signed URLs.
-- **AI eval harness:** I store the AI's original vs overridden labels, which is exactly the data I'd use to build a small accuracy eval and tune the prompt.
-- **Caching the draft:** right now a draft is regenerated each time; I'd cache the last draft per ticket to avoid repeat calls.
-- **Tests:** I verified the backend end-to-end against every endpoint (auth, RBAC, lifecycle, AI fallback, note isolation); given more time I'd commit that as an automated pytest suite.
+- The token is kept in localStorage. httpOnly cookies would be better.
+- The attachment field on the new ticket form is UI only.
+- Drafts aren't cached, so asking twice calls Gemini twice.
+- No migrations (Alembic), tables are created with `create_all`.
+- No rate limiting on login.

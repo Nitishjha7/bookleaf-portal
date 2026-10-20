@@ -1,0 +1,75 @@
+name: Deploy to Cloud Run
+
+# runs after CI has passed on main
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: ${{ vars.GCP_REGION }}
+  REPO: bookleaf
+  API_SERVICE: bookleaf-api
+  WEB_SERVICE: bookleaf-web
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Docker auth for Artifact Registry
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+      - name: Build and push API image
+        run: |
+          IMAGE=${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/api:${GITHUB_SHA}
+          docker build -t $IMAGE backend
+          docker push $IMAGE
+          echo "API_IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Deploy API
+        run: |
+          gcloud run deploy ${API_SERVICE} \
+            --image ${API_IMAGE} \
+            --region ${REGION} \
+            --allow-unauthenticated \
+            --add-cloudsql-instances ${{ vars.CLOUDSQL_CONNECTION }} \
+            --set-env-vars "AI_MODEL=gemini-3.8-flash,CORS_ORIGINS=${{ vars.WEB_URL }}" \
+            --set-secrets "SECRET_KEY=bookleaf-secret-key:latest,GEMINI_API_KEY=bookleaf-gemini-key:latest,DATABASE_URL=bookleaf-database-url:latest"
+          echo "API_URL=$(gcloud run services describe ${API_SERVICE} --region ${REGION} --format 'value(status.url)')" >> $GITHUB_ENV
+
+      - name: Build and push web image
+        run: |
+          IMAGE=${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/web:${GITHUB_SHA}
+          docker build --build-arg VITE_API_BASE=${API_URL} -t $IMAGE frontend
+          docker push $IMAGE
+          echo "WEB_IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Deploy web
+        run: |
+          gcloud run deploy ${WEB_SERVICE} \
+            --image ${WEB_IMAGE} \
+            --region ${REGION} \
+            --allow-unauthenticated
+
+      - name: Smoke test
+        run: |
+          curl -fsS ${API_URL}/api/health

@@ -1,8 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// During local dev we proxy /api to the FastAPI backend on :8099 so the
-// frontend can call relative URLs and we avoid CORS entirely in dev.
+// dev only: proxy /api to the backend
 export default defineConfig({
   plugins: [react()],
   server: {

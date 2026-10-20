@@ -1,44 +1,133 @@
-# Deployment guide
+# Deploying to GCP (Cloud Run)
 
-Two easy paths. Either gives BookLeaf a live URL to test both portals.
+Two Cloud Run services (`bookleaf-api` and `bookleaf-web`) and a Cloud SQL Postgres database.
+Secrets live in Secret Manager. GitHub Actions builds the images and deploys on every push to `main`.
 
-## Option 1 — Render (backend + Postgres) + Vercel (frontend)
+If you don't want to pay for Cloud SQL for a demo, you can leave out the `DATABASE_URL` secret (and
+the `--add-cloudsql-instances` flag in `deploy.yml`). The API then uses SQLite inside the container,
+which works but resets whenever Cloud Run starts a new instance.
 
-### Backend on Render
-1. Push this repo to GitHub, then on Render: **New → Web Service**, point it at the repo,
-   root directory `backend`.
-2. Environment: **Docker** (the `backend/Dockerfile` is picked up automatically), or
-   **Python** with build `pip install -r requirements.txt` and start
-   `python -m app.seed && python -m app.seed_demo && uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-3. Add a **Render PostgreSQL** instance and set these env vars on the web service:
-   - `DATABASE_URL` → the Render Postgres *internal* URL
-   - `SECRET_KEY` → a long random string (`python -c "import secrets;print(secrets.token_hex(32))"`)
-   - `ANTHROPIC_API_KEY` → your key
-   - `AI_MODEL` → `claude-3-5-haiku-20241022`
-   - `CORS_ORIGINS` → your Vercel URL (e.g. `https://bookleaf-portal.vercel.app`)
-4. Deploy. Your API is at `https://<service>.onrender.com` (docs at `/docs`).
+Replace the values at the top with your own.
 
-### Frontend on Vercel
-1. On Vercel: **Add New → Project**, import the repo, set **Root Directory** to `frontend`.
-2. Framework preset: **Vite**. Build `npm run build`, output `dist`.
-3. Add env var `VITE_API_BASE` = your Render backend URL (e.g. `https://<service>.onrender.com`).
-4. Deploy. Share the Vercel URL as the live demo.
+## 1. One-time setup
 
-## Option 2 — Railway (all-in-one)
-1. New project → Deploy from repo.
-2. Add a **PostgreSQL** plugin; Railway injects `DATABASE_URL`.
-3. Add a service for `backend/` (Dockerfile) and one for `frontend/` (static) — set the same
-   env vars as above.
-
-## Option 3 — Local, one command
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...   # optional
-docker compose up --build
-# frontend http://localhost:8080 · API http://localhost:8099/docs
+export PROJECT_ID=your-project-id
+export REGION=asia-south1
+export GH_REPO=your-github-user/bookleaf-portal
+
+gcloud config set project $PROJECT_ID
+
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com \
+  sqladmin.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com
+
+gcloud artifacts repositories create bookleaf --repository-format=docker --location=$REGION
 ```
 
-## After deploying
-- Confirm `GET /api/health` returns `{"status":"ok","ai_active":true,...}` (ai_active is `true`
-  once the key is set).
-- Log in with the demo credentials in the README and check both portals.
-- The live demo comes **pre-seeded** with the provided dataset and a few sample tickets.
+### Database
+
+```bash
+gcloud sql instances create bookleaf-db --database-version=POSTGRES_16 \
+  --tier=db-f1-micro --region=$REGION
+gcloud sql databases create bookleaf --instance=bookleaf-db
+gcloud sql users create bookleaf --instance=bookleaf-db --password=CHOOSE_A_PASSWORD
+```
+
+The connection name is `PROJECT_ID:REGION:bookleaf-db`.
+
+### Secrets
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))" | gcloud secrets create bookleaf-secret-key --data-file=-
+printf '%s' "YOUR_GEMINI_KEY" | gcloud secrets create bookleaf-gemini-key --data-file=-
+printf '%s' "postgresql://bookleaf:CHOOSE_A_PASSWORD@/bookleaf?host=/cloudsql/$PROJECT_ID:$REGION:bookleaf-db" \
+  | gcloud secrets create bookleaf-database-url --data-file=-
+```
+
+Get a Gemini key at https://aistudio.google.com/apikey.
+
+### Service accounts
+
+```bash
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+
+# used by GitHub Actions to deploy
+gcloud iam service-accounts create gh-deployer
+DEPLOYER=gh-deployer@$PROJECT_ID.iam.gserviceaccount.com
+for role in run.admin artifactregistry.writer iam.serviceAccountUser; do
+  gcloud projects add-iam-policy-binding $PROJECT_ID --member=serviceAccount:$DEPLOYER --role=roles/$role
+done
+
+# the account Cloud Run runs as needs the secrets and the database
+RUNTIME=$PROJECT_NUMBER-compute@developer.gserviceaccount.com
+for role in secretmanager.secretAccessor cloudsql.client; do
+  gcloud projects add-iam-policy-binding $PROJECT_ID --member=serviceAccount:$RUNTIME --role=roles/$role
+done
+```
+
+### Letting GitHub deploy without a key file (Workload Identity Federation)
+
+```bash
+gcloud iam workload-identity-pools create github --location=global
+gcloud iam workload-identity-pools providers create-oidc github-provider \
+  --location=global --workload-identity-pool=github \
+  --issuer-uri=https://token.actions.githubusercontent.com \
+  --attribute-mapping=google.subject=assertion.sub,attribute.repository=assertion.repository \
+  --attribute-condition="assertion.repository=='$GH_REPO'"
+
+gcloud iam service-accounts add-iam-policy-binding $DEPLOYER \
+  --role=roles/iam.workloadIdentityUser \
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/$GH_REPO"
+```
+
+### GitHub settings
+
+Repo, Settings, Secrets and variables, Actions.
+
+Secrets:
+
+| Name | Value |
+|------|-------|
+| `GCP_WIF_PROVIDER` | `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github-provider` |
+| `GCP_DEPLOY_SA` | `gh-deployer@PROJECT_ID.iam.gserviceaccount.com` |
+
+Variables:
+
+| Name | Value |
+|------|-------|
+| `GCP_PROJECT_ID` | your project id |
+| `GCP_REGION` | for example `asia-south1` |
+| `CLOUDSQL_CONNECTION` | `PROJECT_ID:REGION:bookleaf-db` |
+| `WEB_URL` | the frontend URL, see below |
+
+## 2. First deploy
+
+The API needs the frontend URL for CORS and the frontend needs the API URL, so the first deploy
+takes two runs.
+
+1. Push to `main` (or start the Deploy workflow by hand) with `WEB_URL` set to any placeholder.
+   Both services get deployed.
+2. Get the real frontend URL, put it in the `WEB_URL` variable and run the workflow again:
+
+   ```bash
+   gcloud run services describe bookleaf-web --region $REGION --format='value(status.url)'
+   ```
+
+The URLs don't change after that, so later pushes to `main` just redeploy.
+
+## 3. Check it
+
+```bash
+curl https://YOUR-API-URL/api/health
+```
+
+It should return `"status":"ok"` and `"ai_active":true`. Then open the frontend URL and log in with the
+accounts from the README. The database is seeded the first time the API container starts.
+
+## Notes
+
+- Cloud SQL `db-f1-micro` costs a few dollars a month. When you're done with the demo, delete it:
+  `gcloud sql instances delete bookleaf-db`.
+- Cloud Run scales to zero, so the first request after a quiet period takes a few seconds.
+- The frontend needs the API URL at build time (`VITE_API_BASE`), which is why the workflow does
+  `docker build --build-arg` instead of `gcloud run deploy --source`.

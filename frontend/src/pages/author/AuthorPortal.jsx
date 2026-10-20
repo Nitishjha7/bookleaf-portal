@@ -6,7 +6,7 @@ import MyTickets from "./MyTickets.jsx";
 
 export default function AuthorPortal() {
   const [tab, setTab] = useState("books");
-  // Bumping this key tells MyTickets to refetch (after a new ticket is filed).
+  // bump to make MyTickets refetch after a new ticket
   const [ticketsKey, setTicketsKey] = useState(0);
 
   return (

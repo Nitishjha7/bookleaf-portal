@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import { Badge, Empty } from "../../components.jsx";
 
-// Near-real-time: poll every 5s so admin replies appear without a manual
-// refresh. Polling (rather than websockets) is simple, robust, and perfectly
-// responsive for a support inbox — the assignment explicitly allows it.
+// poll so admin replies show up without refreshing
 const POLL_MS = 5000;
 
 export default function MyTickets({ refreshKey }) {
