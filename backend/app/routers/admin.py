@@ -67,7 +67,7 @@ def ai_draft(ticket_id: int, db: Session = Depends(get_db),
     """Drafted on request, not at ticket creation, to save tokens."""
     ticket = _get_ticket_or_404(ticket_id, db)
     result = draft_response(ticket)
-    return AIDraftOut(draft=result["draft"], source=result["source"])
+    return AIDraftOut(**result)
 
 
 @router.post("/tickets/{ticket_id}/responses", response_model=TicketAdminView, status_code=201)

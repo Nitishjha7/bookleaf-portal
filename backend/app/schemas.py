@@ -126,3 +126,4 @@ class RespondCreate(BaseModel):
 class AIDraftOut(BaseModel):
     draft: str
     source: str  # "ai" or "fallback"
+    reason: Optional[str] = None  # why it fell back

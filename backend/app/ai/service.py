@@ -169,10 +169,11 @@ def draft_response(ticket: Ticket) -> dict:
     try:
         draft = complete(system=_DRAFT_SYSTEM, user=user, max_tokens=600, temperature=0.4)
         if draft:
-            return {"draft": draft, "source": "ai"}
-    except AIUnavailable:
-        pass
-    return {"draft": _fallback_draft(ticket), "source": "fallback"}
+            return {"draft": draft, "source": "ai", "reason": None}
+        reason = "empty response from the model"
+    except AIUnavailable as e:
+        reason = str(e)[:150]
+    return {"draft": _fallback_draft(ticket), "source": "fallback", "reason": reason}
 
 
 def _fallback_draft(ticket: Ticket) -> str:
