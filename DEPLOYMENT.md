@@ -18,6 +18,7 @@ frontend, so there is one service and no CORS setup.
    | `SECRET_KEY` | long random string |
    | `GEMINI_API_KEY` | key from https://aistudio.google.com/apikey |
    | `AI_MODEL` | `gemini-3.8-flash` |
+   | `AI_FALLBACK_MODELS` | optional, defaults to `gemini-3.5-flash,gemini-flash-lite-latest` |
 
 For anything beyond a demo, keep the three secrets in Secret Manager and reference them from the
 service instead of plain environment variables.

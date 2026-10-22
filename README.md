@@ -77,6 +77,8 @@ Each result carries `source: "ai" | "fallback"`, which the UI shows. The model's
 and priority are stored next to the current values, so admin overrides stay visible.
 
 The key is read from `GEMINI_API_KEY` on the backend only. Change the model with `AI_MODEL`.
+Quotas are per model, so if the main model is rate limited or down, `AI_FALLBACK_MODELS`
+(comma separated) are tried in order before falling back to keyword rules.
 
 ## Design notes
 
