@@ -127,11 +127,4 @@ Books with no payout yet show "none yet". Books still in production have no MRP 
 "—", and can still be selected on a ticket. Fully paid books and authors with one or many books
 are handled.
 
-## Known gaps
-
-- The token is stored in localStorage; httpOnly cookies would be safer.
-- No rate limiting on login and no migrations (tables come from `create_all`).
-- The attachment field on the ticket form is UI only.
-- Drafts aren't cached, so each request calls Gemini again.
-
 Deployment steps are in [DEPLOYMENT.md](DEPLOYMENT.md), design reasoning in [WRITEUP.md](WRITEUP.md).
