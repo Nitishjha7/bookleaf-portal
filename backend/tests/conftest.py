@@ -22,6 +22,7 @@ def client():
 def login(client, email, password):
     r = client.post("/api/auth/login", data={"username": email, "password": password})
     assert r.status_code == 200, r.text
+    client.cookies.clear()  # tests send the Bearer header explicitly
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 

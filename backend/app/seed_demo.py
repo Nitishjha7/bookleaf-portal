@@ -1,4 +1,7 @@
-"""Adds a few sample tickets so the admin queue isn't empty. Run after app.seed."""
+"""Adds a few sample tickets so the admin queue isn't empty. Run after app.seed.
+
+They are triaged with the keyword rules, not Gemini, so a fresh deploy costs no API quota.
+"""
 from .database import SessionLocal
 from .models import Author, Book, Ticket, TicketResponse, TicketStatus, Admin
 from .ai.service import classify_ticket
@@ -45,7 +48,8 @@ def run():
                 book = db.query(Book).filter(
                     Book.author_id == author.id, Book.title == book_title
                 ).first()
-            triage = classify_ticket(subject, desc)
+            # keyword rules here so seeding never spends Gemini quota
+            triage = classify_ticket(subject, desc, use_ai=False)
             ticket = Ticket(
                 author_id=author.id,
                 book_id=book.id if book else None,

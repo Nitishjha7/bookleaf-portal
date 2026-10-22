@@ -24,7 +24,8 @@ end to end, with a plain UI, rather than a polished UI over partial logic.
   in separate columns, so its accuracy can be measured later.
 - **Access control in one place.** Role checks are dependencies in `auth.py`. Author routes filter
   by the logged-in id, and notes live in their own table so they can't reach an author response.
-- **Postgres in production, SQLite for quick local runs**, switched by `DATABASE_URL`.
+- **Postgres in production, SQLite for quick local runs**, switched by `DATABASE_URL`. Schema changes go through Alembic.
+- **Session in an httpOnly cookie**, so the token is out of reach of page scripts, plus a limit on failed logins.
 - **Polling over websockets.** A few seconds of delay is fine for a support inbox and there is less
   to go wrong.
 - **One container on Cloud Run.** The API serves the built frontend, which avoids CORS and a
@@ -33,14 +34,14 @@ end to end, with a plain UI, rather than a polished UI over partial logic.
 ## Trade-offs I accepted
 
 - Neon's free tier sleeps when idle, so the first request after a pause is slow.
-- Seeding runs at container start, guarded by an empty-database check, instead of a migration step.
-- The token is in localStorage for simplicity.
+- Seeding runs at container start, guarded by an empty-database check, after the migrations.
+- Failed-login limiting is in memory, so it is per instance. That is fine for one Cloud Run instance; several would need a shared store.
 
 ## Next
 
-- httpOnly cookies, refresh tokens and login rate limiting.
+- Refresh tokens and a shared rate-limit store if the service runs on several instances.
 - Server-sent events for the ticket feed, and email notifications to authors.
 - Use the stored AI-versus-admin values to measure classification accuracy and tune the prompt.
 - Retrieve only the relevant policy section for a draft instead of sending the whole knowledge base.
 - Real attachments with signed upload URLs, and SLA timers per priority.
-- Alembic migrations and wider test coverage.
+- Wider test coverage, including browser tests for the two portals.

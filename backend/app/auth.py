@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -12,7 +12,9 @@ from .config import settings
 from .database import get_db
 from .models import Author, Admin
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+# the browser app uses an httpOnly cookie, Swagger and scripts can send a Bearer header
+COOKIE_NAME = "bl_session"
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
 # using bcrypt directly, passlib 1.7 breaks with bcrypt 4.x
@@ -59,8 +61,15 @@ class Principal:
         return self.author.id if self.role == "author" else self.admin.id
 
 
-def get_current_principal(token: str = Depends(oauth2_scheme),
+def get_current_principal(request: Request, token: str | None = Depends(oauth2_scheme),
                           db: Session = Depends(get_db)) -> Principal:
+    token = token or request.cookies.get(COOKIE_NAME)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     data = _decode(token)
     user_id, role = int(data.get("sub", 0)), data.get("role")
     if role == "author":

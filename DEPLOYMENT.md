@@ -30,7 +30,11 @@ first start `app/bootstrap.py` creates the tables and loads the dataset and samp
 nothing if the database already has authors, so redeploys keep the data.
 
 The free tier suspends the database after a few minutes of inactivity, so the first request after
-that is slow. `pool_pre_ping` keeps stale connections from causing errors.
+that is slower. `pool_pre_ping` and a connect timeout keep that from causing errors. To keep it awake,
+point a free uptime pinger (UptimeRobot, cron-job.org) at `/api/health` every 5 minutes. The endpoint
+runs `SELECT 1`, so each ping touches the database.
+
+Schema changes are Alembic migrations (`backend/alembic`) and run automatically on start.
 
 ## Check
 

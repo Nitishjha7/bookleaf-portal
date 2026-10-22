@@ -14,8 +14,8 @@ export default function Login() {
     setErr("");
     setBusy(true);
     try {
-      const { access_token, role, name } = await api.login(email, password);
-      setSession(access_token, role, name);
+      const { role, name } = await api.login(email, password);
+      setSession(role, name);
       nav(role === "admin" ? "/admin" : "/author", { replace: true });
     } catch (e) {
       setErr(e.message);

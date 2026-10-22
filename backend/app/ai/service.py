@@ -53,8 +53,12 @@ Respond with only a compact JSON object, no prose:
 {{"category": "<one category>", "priority": "<one priority>", "reason": "<max 12 words>"}}"""
 
 
-def classify_ticket(subject: str, description: str) -> dict:
+def classify_ticket(subject: str, description: str, use_ai: bool = True) -> dict:
     """Returns category, priority, note and source ('ai' or 'fallback'). Doesn't raise."""
+    if not use_ai:
+        result = _rule_based_classify(subject, description)
+        result["source"] = "fallback"
+        return result
     user = f"Subject: {subject}\n\nDescription: {description}"
     try:
         raw = complete(system=_CLASSIFY_SYSTEM, user=user, max_tokens=120, temperature=0.0)

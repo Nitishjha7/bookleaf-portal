@@ -19,7 +19,7 @@ the first request can take a few seconds.
 
 | | |
 |---|---|
-| Backend | FastAPI, SQLAlchemy, JWT auth with role checks |
+| Backend | FastAPI, SQLAlchemy, Alembic migrations, JWT auth (httpOnly cookie) with role checks |
 | Frontend | React, Vite |
 | Database | PostgreSQL (Neon in production, Postgres in Docker locally, SQLite if `DATABASE_URL` is unset) |
 | AI | Google Gemini (`gemini-3.8-flash`), keyword rules as fallback |
@@ -35,8 +35,9 @@ GEMINI_API_KEY=your-key docker compose up --build
 ```
 
 Frontend on http://localhost:8080, API docs on http://localhost:8099/docs. The key is optional;
-without it triage uses keyword rules. The first start creates the tables and loads the dataset
-and a few sample tickets. Later starts leave existing data alone.
+without it triage uses keyword rules. The first start runs the migrations and loads the dataset
+and a few sample tickets (triaged with keyword rules, so seeding uses no Gemini quota). Later starts
+leave existing data alone.
 
 Without Docker (Python 3.11 or 3.12, Node 20):
 
@@ -45,7 +46,7 @@ cd backend
 python -m venv venv && source venv/bin/activate     # venv\Scripts\activate on Windows
 pip install -r requirements.txt
 cp .env.example .env                                # add GEMINI_API_KEY
-python -m app.seed && python -m app.seed_demo       # seed drops existing tables
+python -m app.bootstrap                           # migrations + sample data (only if the db is empty)
 uvicorn app.main:app --reload --port 8099
 
 cd frontend
@@ -86,6 +87,12 @@ Quotas are per model, so if the main model is rate limited or down, `AI_FALLBACK
   (admin only) are separate tables, and the author serializer has no path to notes.
 - Author routes always filter by the logged-in author's id, never an id from the URL.
 - Role checks live in `auth.py` as dependencies, not in each route.
+- The browser session is an httpOnly, SameSite=Lax cookie, so JavaScript never sees the token.
+  Swagger and scripts can still send a Bearer header.
+- Failed logins are limited to 5 per 15 minutes per IP and email (in memory, per instance).
+- Schema changes go through Alembic (`alembic/versions`). `app/bootstrap.py` runs them on start,
+  and stamps a database that was created before migrations existed.
+- `/api/health` checks the database, so a free uptime pinger also keeps Neon awake.
 - The ticket list polls every 5 seconds. Simple and enough for a support inbox.
 
 ```
@@ -93,9 +100,11 @@ backend/app/
   main.py, config.py, database.py, models.py, schemas.py, serializers.py
   auth.py            bcrypt, JWT, role dependencies
   seed.py            loads seed_data.json (drops tables), seed_demo.py adds sample tickets
-  bootstrap.py       container start: seeds only an empty database
+  bootstrap.py       container start: migrate, then seed only an empty database
+  ratelimit.py       failed-login limiter
   ai/                client.py (Gemini), service.py (triage, draft), knowledge_base.py
   routers/           auth.py, authors.py (/api/me), admin.py (/api/admin)
+backend/alembic/     migrations
 backend/tests/       pytest suite
 frontend/src/        pages/author, pages/admin, Login, api.js
 Dockerfile           single image (API + built frontend) used on Cloud Run
@@ -107,7 +116,8 @@ All routes are under `/api` and need a Bearer token except login.
 
 | Method | Path | Who | |
 |--------|------|-----|---|
-| POST | `/auth/login` | anyone | form fields `username` (email), `password` |
+| POST | `/auth/login` | anyone | form fields `username` (email), `password`; sets the session cookie |
+| POST | `/auth/logout` | anyone | clears the cookie |
 | GET | `/auth/me` | any | role and name |
 | GET | `/me`, `/me/books` | author | profile, own books |
 | GET | `/me/tickets`, `/me/tickets/{id}` | author | own tickets with replies |
@@ -119,9 +129,9 @@ All routes are under `/api` and need a Bearer token except login.
 | PATCH | `/admin/tickets/{id}/status` `/category` `/priority` | admin | update or override |
 | POST | `/admin/tickets/{id}/notes` | admin | internal note |
 | POST | `/admin/tickets/{id}/assign` | admin | assign to yourself |
-| GET | `/health` | anyone | status, whether the AI key is set |
+| GET | `/health` | anyone | database check, whether the AI key is set |
 
-Invalid input returns 422, a missing or bad token 401, the wrong role 403.
+Invalid input returns 422, a missing or bad session 401, the wrong role 403, too many failed logins 429.
 
 ## Dataset edge cases
 

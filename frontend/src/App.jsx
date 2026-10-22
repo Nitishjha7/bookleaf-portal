@@ -1,20 +1,20 @@
 import { Routes, Route, Navigate } from "react-router-dom";
-import { getToken, getRole } from "./api";
+import { isLoggedIn, getRole } from "./api";
 import Login from "./pages/Login.jsx";
 import AuthorPortal from "./pages/author/AuthorPortal.jsx";
 import AdminQueue from "./pages/admin/AdminQueue.jsx";
 import AdminTicket from "./pages/admin/AdminTicket.jsx";
 
-// needs a token, and a specific role if one is passed
+// needs a session, and a specific role if one is passed
 function Protected({ role, children }) {
-  if (!getToken()) return <Navigate to="/login" replace />;
+  if (!isLoggedIn()) return <Navigate to="/login" replace />;
   if (role && getRole() !== role) return <Navigate to="/" replace />;
   return children;
 }
 
 // logged in users go to their own portal
 function Home() {
-  if (!getToken()) return <Navigate to="/login" replace />;
+  if (!isLoggedIn()) return <Navigate to="/login" replace />;
   return <Navigate to={getRole() === "admin" ? "/admin" : "/author"} replace />;
 }
 

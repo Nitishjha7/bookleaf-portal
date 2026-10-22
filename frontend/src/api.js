@@ -1,19 +1,19 @@
-// fetch wrapper: adds the token, throws an Error with the backend's `detail` on non-2xx
+// fetch wrapper: throws an Error with the backend's `detail` on non-2xx.
+// The session itself is an httpOnly cookie set by the API, so no token is kept in JS.
 
 const BASE = import.meta.env.VITE_API_BASE || "";
 
-export function getToken() {
-  return localStorage.getItem("bl_token");
-}
-export function setSession(token, role, name) {
-  localStorage.setItem("bl_token", token);
+// role and name are only used to pick a portal and show a name, they are not credentials
+export function setSession(role, name) {
   localStorage.setItem("bl_role", role);
   localStorage.setItem("bl_name", name);
 }
 export function clearSession() {
-  localStorage.removeItem("bl_token");
   localStorage.removeItem("bl_role");
   localStorage.removeItem("bl_name");
+}
+export function isLoggedIn() {
+  return !!localStorage.getItem("bl_role");
 }
 export function getRole() {
   return localStorage.getItem("bl_role");
@@ -24,8 +24,6 @@ export function getName() {
 
 async function request(method, path, body, { form = false } = {}) {
   const headers = {};
-  const token = getToken();
-  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   let payload;
   if (form) {
@@ -36,12 +34,21 @@ async function request(method, path, body, { form = false } = {}) {
     payload = JSON.stringify(body);
   }
 
-  const res = await fetch(BASE + path, { method, headers, body: payload });
+  const res = await fetch(BASE + path, { method, headers, body: payload, credentials: "include" });
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
 
   if (!res.ok) {
-    if (res.status === 401) clearSession();
+    if (res.status === 401 && path !== "/api/auth/login") {
+      // session expired or cookie missing
+      clearSession();
+      if (window.location.pathname !== "/login") window.location.assign("/login");
+    }
     let msg = data?.detail || `Request failed (${res.status})`;
     if (res.status === 422 && Array.isArray(data?.errors)) {
       // show which field failed, e.g. "subject: String should have at least 3 characters"
@@ -53,6 +60,7 @@ async function request(method, path, body, { form = false } = {}) {
 }
 
 export const api = {
+  logout: () => request("POST", "/api/auth/logout"),
   login: (email, password) =>
     request("POST", "/api/auth/login", { username: email, password }, { form: true }),
 

@@ -5,6 +5,7 @@ def test_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["ai_active"] is False
+    assert r.json()["db"] == "ok"
 
 
 def test_bad_login(client):
@@ -81,3 +82,26 @@ def test_other_author_cannot_open_ticket(client, author_h):
     tid = client.get("/api/me/tickets", headers=author_h).json()[0]["id"]
     other = login(client, "rohit.kapoor@email.com", "author123")
     assert client.get(f"/api/me/tickets/{tid}", headers=other).status_code == 404
+
+
+def test_login_sets_httponly_cookie_and_cookie_works(client):
+    r = client.post("/api/auth/login", data={"username": "priya.sharma@email.com", "password": "author123"})
+    assert r.status_code == 200
+    cookie = r.headers["set-cookie"].lower()
+    assert "bl_session=" in cookie and "httponly" in cookie and "samesite=lax" in cookie
+    # the TestClient keeps the cookie, so this call has no Authorization header
+    assert client.get("/api/me").status_code == 200
+    assert client.post("/api/auth/logout").status_code == 204
+    client.cookies.clear()
+    assert client.get("/api/me").status_code == 401
+
+
+def test_login_is_rate_limited(client):
+    for _ in range(5):
+        r = client.post("/api/auth/login", data={"username": "ananya.reddy@email.com", "password": "wrong"})
+        assert r.status_code == 401
+    r = client.post("/api/auth/login", data={"username": "ananya.reddy@email.com", "password": "author123"})
+    assert r.status_code == 429 and "retry-after" in r.headers
+    # a different account is not affected
+    r = client.post("/api/auth/login", data={"username": "rohit.kapoor@email.com", "password": "author123"})
+    assert r.status_code == 200

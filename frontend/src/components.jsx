@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { clearSession, getName } from "./api";
+import { api, clearSession, getName } from "./api";
 
 // pill for status / priority / category
 export function Badge({ kind, value }) {
@@ -9,7 +9,12 @@ export function Badge({ kind, value }) {
 
 export function Header({ title, subtitle, right }) {
   const nav = useNavigate();
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // the cookie is gone or the API is unreachable, either way we leave
+    }
     clearSession();
     nav("/login", { replace: true });
   };

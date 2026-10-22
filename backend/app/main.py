@@ -2,20 +2,20 @@
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
 from .config import settings
-from .database import Base, engine
+from .database import get_db
 from .routers import auth, authors, admin
 
 logging.basicConfig(level=logging.INFO)
-
-# tables only, seeding is a separate step (app/seed.py)
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="BookLeaf Author Support & Communication Portal",
@@ -57,9 +57,14 @@ app.include_router(admin.router)
 
 
 @app.get("/api/health", tags=["meta"])
-def health():
-    """for docker/cloud run healthchecks, also shows whether the AI key was picked up"""
-    return {"status": "ok", "ai_active": settings.ai_active, "model": settings.ai_model}
+def health(db: Session = Depends(get_db)):
+    """healthcheck: touches the database, so pinging it also keeps a free Neon db awake"""
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:  # noqa: BLE001
+        logging.exception("health check: database unreachable")
+        return JSONResponse(status_code=503, content={"status": "degraded", "db": "down"})
+    return {"status": "ok", "db": "ok", "ai_active": settings.ai_active, "model": settings.ai_model}
 
 
 # the root Dockerfile copies the built frontend to backend/static, so one container serves both
