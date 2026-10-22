@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,12 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @field_validator("gemini_api_key", mode="before")
+    @classmethod
+    def _clean_key(cls, v):
+        # pasted keys often come with spaces, newlines or quotes
+        return (v or "").strip().strip("'\"")
 
     @property
     def cors_origin_list(self) -> list[str]:

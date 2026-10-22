@@ -39,8 +39,6 @@ def ticket_queue(
     status: TicketStatus | None = Query(None),
     category: TicketCategory | None = Query(None),
     priority: TicketPriority | None = Query(None),
-    assigned_to_me: bool = Query(False),
-    me_id: int | None = None,
 ):
     """All tickets, most urgent first. Filters are enums so bad values give a 422."""
     q = db.query(Ticket)

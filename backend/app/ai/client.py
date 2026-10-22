@@ -42,6 +42,7 @@ def complete(*, system: str, user: str, max_tokens: int = 600,
                 temperature=temperature,
                 # thinking tokens would eat into max_output_tokens and we don't need them here
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
+                http_options=types.HttpOptions(timeout=20000),
             ),
         )
         return (resp.text or "").strip()

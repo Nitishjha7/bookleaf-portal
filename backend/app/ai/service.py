@@ -69,9 +69,12 @@ def classify_ticket(subject: str, description: str) -> dict:
                 "source": "ai",
             }
         # labels didn't match our enums, use the rules instead
-    except AIUnavailable:
-        pass
+    except AIUnavailable as e:
+        reason = str(e)[:90]
+    else:
+        reason = "unexpected labels from the model"
     result = _rule_based_classify(subject, description)
+    result["note"] = f"Rule-based fallback ({reason})"
     result["source"] = "fallback"
     return result
 
