@@ -50,12 +50,12 @@ export default function Login() {
         </button>
 
         <div className="hint">
-          <b>Demo logins</b> (click to fill):<br />
+          <b>Demo logins</b> (click to fill in):<br />
           <a href="#" onClick={(e) => { e.preventDefault(); fill("priya.sharma@email.com", "author123"); }}>
-            Author — priya.sharma@email.com
+            Author: priya.sharma@email.com / author123
           </a><br />
           <a href="#" onClick={(e) => { e.preventDefault(); fill("admin@bookleaf.com", "admin123"); }}>
-            Admin — admin@bookleaf.com
+            Admin: admin@bookleaf.com / admin123
           </a>
         </div>
       </form>
