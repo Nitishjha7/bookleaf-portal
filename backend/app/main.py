@@ -1,8 +1,10 @@
 """App entry point: CORS, routers, health check and JSON error handlers."""
 import logging
+from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -58,3 +60,19 @@ app.include_router(admin.router)
 def health():
     """for docker/cloud run healthchecks, also shows whether the AI key was picked up"""
     return {"status": "ok", "ai_active": settings.ai_active, "model": settings.ai_model}
+
+
+# the root Dockerfile copies the built frontend to backend/static, so one container serves both
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+if STATIC_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend(path: str):
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        file = (STATIC_DIR / path).resolve()
+        if path and file.is_file() and STATIC_DIR in file.parents:
+            return FileResponse(file)
+        return FileResponse(STATIC_DIR / "index.html")
