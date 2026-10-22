@@ -31,21 +31,24 @@ def _get_client():
 def complete(*, system: str, user: str, max_tokens: int = 600,
              temperature: float = 0.3) -> str:
     client = _get_client()
-    try:
-        from google.genai import types
-        resp = client.models.generate_content(
-            model=settings.ai_model,
-            contents=user,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                max_output_tokens=max_tokens,
-                temperature=temperature,
-                # thinking tokens would eat into max_output_tokens and we don't need them here
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-                http_options=types.HttpOptions(timeout=20000),
-            ),
-        )
-        return (resp.text or "").strip()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("gemini call failed: %s", e)
-        raise AIUnavailable(str(e))
+    from google.genai import types
+    config = types.GenerateContentConfig(
+        system_instruction=system,
+        max_output_tokens=max_tokens,
+        temperature=temperature,
+        # thinking tokens would eat into max_output_tokens and we don't need them here
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        http_options=types.HttpOptions(timeout=20000),
+    )
+    last_error = None
+    for model in settings.ai_model_chain:
+        try:
+            resp = client.models.generate_content(model=model, contents=user, config=config)
+            text = (resp.text or "").strip()
+            if text:
+                return text
+            last_error = f"{model}: empty response"
+        except Exception as e:  # noqa: BLE001
+            last_error = f"{model}: {e}"
+        logger.warning("gemini call failed (%s)", last_error)
+    raise AIUnavailable(last_error or "no model configured")
